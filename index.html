@@ -1,0 +1,945 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="TradeGate">
+<title>TradeGate — Trade your plan, not your emotions</title>
+<script>
+// PWA manifest, generated inline so the app stays a single HTML file.
+(() => {
+  const icon = "data:image/svg+xml," + encodeURIComponent(
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>" +
+    "<rect width='100' height='100' rx='22' fill='#0d1117'/>" +
+    "<rect x='20' y='52' width='12' height='28' rx='2' fill='#f85149'/>" +
+    "<rect x='44' y='38' width='12' height='42' rx='2' fill='#2ea043'/>" +
+    "<rect x='68' y='24' width='12' height='56' rx='2' fill='#2ea043'/>" +
+    "</svg>");
+  const manifest = {
+    name: "TradeGate",
+    short_name: "TradeGate",
+    description: "Trade your plan, not your emotions.",
+    start_url: location.href,
+    scope: location.href.replace(/[^/]*$/, ""),
+    display: "standalone",
+    background_color: "#0d1117",
+    theme_color: "#0d1117",
+    icons: [{ src: icon, sizes: "any", type: "image/svg+xml", purpose: "any" }],
+  };
+  const link = document.createElement("link");
+  link.rel = "manifest";
+  link.href = "data:application/manifest+json," + encodeURIComponent(JSON.stringify(manifest));
+  document.head.appendChild(link);
+  // Offline support: register the service worker when served over http(s).
+  if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
+    addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+  }
+})();
+</script>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel2: #1c2330;
+    --border: #2d333b;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --green: #2ea043;
+    --green-soft: rgba(46,160,67,.15);
+    --red: #f85149;
+    --red-soft: rgba(248,81,73,.12);
+    --amber: #d29922;
+    --amber-soft: rgba(210,153,34,.12);
+    --blue: #388bfd;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 16px 16px 80px; }
+  header { display: flex; align-items: baseline; gap: 10px; padding: 8px 0 16px; }
+  header h1 { font-size: 22px; letter-spacing: .5px; }
+  header h1 span { color: var(--green); }
+  header p { color: var(--muted); font-size: 13px; }
+
+  nav { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+  nav button {
+    background: var(--panel); color: var(--muted); border: 1px solid var(--border);
+    padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 14px;
+  }
+  nav button.active { color: var(--text); border-color: var(--blue); background: var(--panel2); }
+
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 12px; }
+
+  /* Gate status */
+  .gate-status { text-align: center; padding: 28px 16px; border-radius: 12px; margin-bottom: 14px; border: 1px solid var(--border); }
+  .gate-status .cmd { font-size: 42px; font-weight: 800; letter-spacing: 4px; }
+  .gate-status .sub { color: var(--muted); margin-top: 6px; font-size: 14px; }
+  .gate-ALLOW { background: var(--green-soft); border-color: var(--green); }
+  .gate-ALLOW .cmd { color: var(--green); }
+  .gate-WAIT { background: var(--amber-soft); border-color: var(--amber); }
+  .gate-WAIT .cmd { color: var(--amber); }
+  .gate-BLOCK { background: var(--red-soft); border-color: var(--red); }
+  .gate-BLOCK .cmd { color: var(--red); }
+  .reasons { margin-top: 12px; text-align: left; display: inline-block; }
+  .reasons li { color: var(--text); font-size: 14px; margin: 4px 0 4px 18px; }
+
+  .limits { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .limit { background: var(--panel2); border-radius: 10px; padding: 12px; }
+  .limit .lbl { color: var(--muted); font-size: 12px; }
+  .limit .val { font-size: 20px; font-weight: 700; margin-top: 4px; }
+  .limit .val.bad { color: var(--red); }
+  .limit .val.ok { color: var(--green); }
+  .limit .val.warn { color: var(--amber); }
+  .bar { height: 6px; background: var(--border); border-radius: 3px; margin-top: 8px; overflow: hidden; }
+  .bar div { height: 100%; border-radius: 3px; }
+
+  label { display: block; color: var(--muted); font-size: 13px; margin: 10px 0 4px; }
+  input, select, textarea {
+    width: 100%; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 15px;
+  }
+  textarea { font-family: inherit; resize: vertical; min-height: 70px; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--blue); }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+
+  .check { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); cursor: pointer; }
+  .check:last-of-type { border-bottom: none; }
+  .check input { width: 18px; height: 18px; accent-color: var(--green); }
+  .check span { font-size: 14px; }
+
+  button.primary {
+    width: 100%; background: var(--green); color: #fff; border: none;
+    padding: 14px; border-radius: 10px; font-size: 16px; font-weight: 700;
+    cursor: pointer; margin-top: 14px;
+  }
+  button.primary:disabled { background: var(--border); color: var(--muted); cursor: not-allowed; }
+  button.danger { background: none; border: 1px solid var(--red); color: var(--red); padding: 10px; border-radius: 8px; width: 100%; cursor: pointer; margin-top: 10px; font-size: 14px; }
+  button.small { background: var(--panel2); border: 1px solid var(--border); color: var(--text); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+
+  .sizebox { background: var(--panel2); border-radius: 10px; padding: 12px; margin-top: 12px; display: none; }
+  .sizebox .big { font-size: 24px; font-weight: 800; color: var(--blue); }
+  .sizebox div { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .sizebox .rr-bad { color: var(--red); }
+  .sizebox .rr-ok { color: var(--green); }
+
+  /* Journal */
+  .trade { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+  .trade .top { display: flex; justify-content: space-between; align-items: center; }
+  .trade .sym { font-weight: 700; font-size: 16px; }
+  .trade .dir-long { color: var(--green); font-size: 12px; font-weight: 700; }
+  .trade .dir-short { color: var(--red); font-size: 12px; font-weight: 700; }
+  .trade .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .trade .result { font-weight: 800; font-size: 16px; }
+  .r-pos { color: var(--green); } .r-neg { color: var(--red); } .r-flat { color: var(--muted); }
+  .closer { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 10px; }
+  .closer input { padding: 8px; }
+
+  /* Stats */
+  .statgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+  .bars { display: flex; align-items: flex-end; gap: 3px; height: 90px; margin-top: 14px; }
+  .bars .bar2 { flex: 1; min-width: 6px; max-width: 30px; border-radius: 3px 3px 0 0; }
+  .empty { color: var(--muted); text-align: center; padding: 24px; font-size: 14px; }
+  .footer-note { color: var(--muted); font-size: 12px; text-align: center; margin-top: 24px; }
+  .prop-only { display: none; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Trade<span>Gate</span></h1>
+    <p>Trade your plan, not your emotions.</p>
+  </header>
+
+  <nav>
+    <button id="tab-gate" class="active" onclick="show('gate')">Gate</button>
+    <button id="tab-prop" onclick="show('prop')">Prop Plan</button>
+    <button id="tab-journal" onclick="show('journal')">Journal</button>
+    <button id="tab-stats" onclick="show('stats')">Stats</button>
+    <button id="tab-settings" onclick="show('settings')">Settings</button>
+  </nav>
+
+  <!-- GATE -->
+  <section id="view-gate">
+    <div id="gateStatus"></div>
+    <div class="card">
+      <h2 id="limitsTitle">Today's Limits</h2>
+      <div class="limits" id="limits"></div>
+      <button class="danger" onclick="endDay()">I'm done for today — lock me out</button>
+    </div>
+    <div class="card" id="ticketCard">
+      <h2>New Trade Ticket</h2>
+      <div id="checklist"></div>
+      <div class="row">
+        <div><label>Symbol</label><input id="tSym" placeholder="EURUSD" oninput="renderTicket()"></div>
+        <div><label>Direction</label>
+          <select id="tDir" onchange="renderTicket()"><option value="long">Long</option><option value="short">Short</option></select>
+        </div>
+      </div>
+      <div class="row3">
+        <div><label>Stop loss (pips)</label><input id="tSL" type="number" step="any" inputmode="decimal" oninput="renderTicket()"></div>
+        <div><label id="targetLbl">Take profit (pips)</label><input id="tTP" type="number" step="any" inputmode="decimal" oninput="renderTicket()"></div>
+        <div><label>Entry price (opt.)</label><input id="tEntry" type="number" step="any" inputmode="decimal" oninput="renderTicket()"></div>
+      </div>
+      <p class="hint" id="pipValHint"></p>
+      <div class="sizebox" id="sizeBox"></div>
+      <button class="primary" id="openBtn" onclick="openTrade()" disabled>Open Trade</button>
+    </div>
+  </section>
+
+  <!-- PROP PLAN -->
+  <section id="view-prop" style="display:none">
+    <div class="card">
+      <h2>Prop Account Plan — enter the firm's rules, get your numbers</h2>
+      <p class="hint">These values ARE your Gate rules — change them here or in Settings, they stay in sync.</p>
+      <div class="row">
+        <div><label>Account size ($)</label><input id="pSize" type="number" step="any" oninput="renderProp()"></div>
+        <div><label>Safety buffer (% of official daily you allow)</label><input id="pBufferPct" type="number" step="5" oninput="renderProp()"></div>
+      </div>
+      <div class="row">
+        <div><label>Max daily drawdown (%)</label><input id="pDaily" type="number" step="0.5" oninput="renderProp()"><p class="hint" id="pDailyHint"></p></div>
+        <div><label>Max total drawdown (%)</label><input id="pMaxDD" type="number" step="0.5" oninput="renderProp()"><p class="hint" id="pMaxDDHint"></p></div>
+      </div>
+      <div class="row3">
+        <div><label>Losses to survive per day</label><input id="pBuffer" type="number" step="1" oninput="renderProp()"></div>
+        <div><label>Instrument</label>
+          <select id="pInst" onchange="document.getElementById('pPipVal').value=this.value; renderProp()">
+            <option value="10">Forex major ($10/pip/lot)</option>
+            <option value="9.1">JPY pair (~$9.1/pip/lot)</option>
+            <option value="10">Gold XAUUSD ($10/pip/lot)</option>
+            <option value="1">Index / custom ($1/pt/lot)</option>
+          </select>
+        </div>
+        <div><label>$ per pip per 1.00 lot</label><input id="pPipVal" type="number" step="any" oninput="renderProp()"></div>
+      </div>
+      <label>Your typical stop loss (pips)</label>
+      <input id="pStop" type="number" step="any" oninput="renderProp()">
+      <div class="sizebox" id="propOut" style="display:block"></div>
+      <button class="primary" onclick="applyPropPlan()">Use suggested risk on my Gate (risk % + loss streak limit)</button>
+      <p class="hint">Account size, daily %, total drawdown % and buffer sync automatically. The button additionally sets your per-trade risk % and the consecutive-loss breaker to the suggested values.</p>
+    </div>
+  </section>
+
+  <!-- JOURNAL -->
+  <section id="view-journal" style="display:none">
+    <div class="card">
+      <h2>Open Trades</h2>
+      <div id="openList"></div>
+    </div>
+    <div class="card">
+      <h2>Closed Trades</h2>
+      <div id="closedList"></div>
+    </div>
+  </section>
+
+  <!-- STATS -->
+  <section id="view-stats" style="display:none">
+    <div class="card">
+      <h2>Performance</h2>
+      <div class="statgrid" id="statGrid"></div>
+      <div class="bars" id="bars"></div>
+      <p class="footer-note">Bars show R result per closed trade, oldest → newest.</p>
+    </div>
+    <div class="card">
+      <h2>Discipline</h2>
+      <div class="statgrid" id="discGrid"></div>
+    </div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="view-settings" style="display:none">
+    <div class="card">
+      <h2>Account</h2>
+      <div class="row">
+        <div><label>Account type</label>
+          <select id="sAccountType" onchange="togglePropFields()">
+            <option value="personal">Personal account</option>
+            <option value="prop_challenge">Prop firm — challenge</option>
+            <option value="prop_funded">Prop firm — funded</option>
+          </select>
+        </div>
+        <div><label>Account size ($)</label><input id="sAccountSize" type="number" step="any"></div>
+      </div>
+      <div class="row">
+        <div><label>Limit values are in</label>
+          <select id="sLimitsUnit">
+            <option value="pct">% of account size</option>
+            <option value="usd">$ fixed amount</option>
+          </select>
+        </div>
+        <div><label>Risk per trade (%)</label><input id="sRisk" type="number" step="0.1"></div>
+      </div>
+      <div class="row">
+        <div><label>Max daily loss (official)</label><input id="sDaily" type="number" step="any"></div>
+        <div><label>Safety buffer (% of official you allow)</label><input id="sBuffer" type="number" step="5"></div>
+      </div>
+      <div class="prop-only">
+        <label>Max total drawdown (account fails below this)</label><input id="sMaxDD" type="number" step="any">
+        <label>Profit target (challenge passes at this)</label><input id="sTarget" type="number" step="any">
+        <p class="hint">Enter both in the unit selected above — e.g. FTMO-style: daily 5, drawdown 10, target 10 (%).</p>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Trade Rules</h2>
+      <div class="row3">
+        <div><label>Max trades / day</label><input id="sMaxTrades" type="number" step="1"></div>
+        <div><label>Max consec. losses</label><input id="sMaxLoss" type="number" step="1"></div>
+        <div><label>Cooldown after loss (min)</label><input id="sCooldown" type="number" step="1"></div>
+      </div>
+      <div class="row">
+        <div><label>Minimum reward:risk (0 = off)</label><input id="sMinRR" type="number" step="0.1"></div>
+        <div><label>Lock-out reminder every (min)</label><input id="sLockRem" type="number" step="5"></div>
+      </div>
+      <label>Pre-trade checklist (one item per line — make it YOUR rules)</label>
+      <textarea id="sChecklist"></textarea>
+      <button class="primary" onclick="saveSettings()">Save Rules</button>
+      <button class="danger" onclick="resetAll()">Reset everything (delete all data)</button>
+    </div>
+    <p class="footer-note">All data stays in your browser (localStorage). Nothing is uploaded anywhere.</p>
+  </section>
+</div>
+
+<script>
+const KEY = 'tradegate_v2';
+const OLD_KEY = 'tradegate_v1';
+const DEFAULTS = {
+  settings: {
+    accountType: 'personal',     // personal | prop_challenge | prop_funded
+    accountSize: 10000,
+    limitsUnit: 'pct',           // pct | usd
+    riskPct: 1,
+    dailyLoss: 4,                // in limitsUnit (FundedNext Stellar Lite: 4%)
+    maxDrawdown: 8,              // prop only, in limitsUnit (Stellar Lite: 8%)
+    profitTarget: 10,            // prop only, in limitsUnit
+    maxTradesPerDay: 3,
+    maxConsecLosses: 2,
+    cooldownMin: 15,
+    minRR: 0,                    // 0 = off
+    bufferPct: 70,               // personal daily cap = official limit × this %
+    lockReminderMin: 30,         // lock-out reminder interval (minutes)
+    checklist: [
+      'This setup matches my written plan',
+      'My stop loss is decided before entry',
+      'I am calm — this is not a revenge or boredom trade',
+    ],
+  },
+  trades: [],          // {id, sym, dir, entry, stop, target, riskAmt, units, openedAt, closedAt, exit, r, pl}
+  blockedAttempts: 0,
+  manualLockDate: null,
+  lastLockNotify: 0,
+  prop: { buffer: 8, pipVal: 10, stop: 20 }   // plan-only inputs; limits live in settings
+};
+
+let S = load();
+function load() {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (raw) {
+      const d = JSON.parse(raw);
+      return { ...structuredClone(DEFAULTS), ...d, settings: { ...DEFAULTS.settings, ...(d.settings || {}) } };
+    }
+    // Migrate v1 data if present (old field names: balance, dailyLossPct).
+    const old = localStorage.getItem(OLD_KEY);
+    if (old) {
+      const d = JSON.parse(old);
+      const merged = structuredClone(DEFAULTS);
+      merged.trades = d.trades || [];
+      merged.blockedAttempts = d.blockedAttempts || 0;
+      merged.manualLockDate = d.manualLockDate || null;
+      if (d.settings) {
+        merged.settings.accountSize = d.settings.balance ?? merged.settings.accountSize;
+        merged.settings.riskPct = d.settings.riskPct ?? merged.settings.riskPct;
+        merged.settings.dailyLoss = d.settings.dailyLossPct ?? merged.settings.dailyLoss;
+        merged.settings.maxTradesPerDay = d.settings.maxTradesPerDay ?? merged.settings.maxTradesPerDay;
+        merged.settings.maxConsecLosses = d.settings.maxConsecLosses ?? merged.settings.maxConsecLosses;
+        merged.settings.cooldownMin = d.settings.cooldownMin ?? merged.settings.cooldownMin;
+      }
+      return merged;
+    }
+    return structuredClone(DEFAULTS);
+  } catch { return structuredClone(DEFAULTS); }
+}
+function save() { localStorage.setItem(KEY, JSON.stringify(S)); }
+
+function todayKey(ts) {
+  const d = ts ? new Date(ts) : new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+const fmt$ = n => (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(2);
+const fmtR = r => (r > 0 ? '+' : '') + r.toFixed(2) + 'R';
+
+/* ---------- core queries ---------- */
+function closedTrades() { return S.trades.filter(t => t.closedAt).sort((a, b) => a.closedAt - b.closedAt); }
+function openTrades()   { return S.trades.filter(t => !t.closedAt).sort((a, b) => b.openedAt - a.openedAt); }
+function tradesToday()  { return S.trades.filter(t => todayKey(t.openedAt) === todayKey()); }
+function totalPL()      { return closedTrades().reduce((s, t) => s + t.pl, 0); }
+function equity()       { return S.settings.accountSize + totalPL(); }
+function dailyPL() {
+  return closedTrades().filter(t => todayKey(t.closedAt) === todayKey()).reduce((s, t) => s + t.pl, 0);
+}
+function consecLosses() {
+  const c = closedTrades(); let n = 0;
+  for (let i = c.length - 1; i >= 0; i--) {
+    if (c[i].r < 0) n++; else break;
+  }
+  return n;
+}
+function lastLossAt() {
+  const losses = closedTrades().filter(t => t.r < 0);
+  return losses.length ? losses[losses.length - 1].closedAt : null;
+}
+
+/* Convert a limit value (in the chosen unit) to dollars. */
+function limit$(value) {
+  const st = S.settings;
+  return st.limitsUnit === 'pct' ? st.accountSize * value / 100 : value;
+}
+function isProp() { return S.settings.accountType !== 'personal'; }
+
+/* FundedNext-style accounting: the personal cap is a buffer below the
+   official limit, and OPEN trade risk counts as floating loss (the firm
+   measures equity, not closed P/L). */
+function personalDaily$() { return limit$(S.settings.dailyLoss) * (S.settings.bufferPct || 100) / 100; }
+function openRisk() { return openTrades().reduce((s, t) => s + t.riskAmt, 0); }
+function capUsedFrac() {
+  const used = -Math.min(0, dailyPL()) + openRisk();
+  const p = personalDaily$();
+  return p > 0 ? used / p : 0;
+}
+/* Risk allowed for a new ticket, applying budget + action levels. */
+function ticketRisk(baseRisk) {
+  const p = personalDaily$();
+  const used = -Math.min(0, dailyPL()) + openRisk();
+  const remaining = Math.max(0, p - used);
+  let risk = Math.min(baseRisk, remaining);
+  let note = '';
+  if (risk < baseRisk) note = `Size capped to your remaining daily budget (${fmt$(remaining)} incl. open-trade risk). `;
+  const frac = used / p;
+  if (frac >= 0.6 && risk > baseRisk / 2) {
+    risk = Math.min(risk, baseRisk / 2);
+    note = '60–80% of your daily cap is used — size halved (action level). ' + note;
+  }
+  return { risk: Math.max(0, risk), note, remaining };
+}
+
+/* ---------- the gate ---------- */
+function gate() {
+  const st = S.settings;
+  const reasons = [];
+  let cmd = 'ALLOW';
+
+  // Prop: total drawdown breach is permanent, checked before everything.
+  if (isProp()) {
+    const floor = st.accountSize - limit$(st.maxDrawdown);
+    if (equity() <= floor) {
+      return { cmd: 'BLOCK', reasons: [
+        `Max drawdown breached — equity ${fmt$(equity())} is at/below the ${fmt$(floor)} floor.`,
+        'This account is failed by prop rules. Reset data to start a new challenge.',
+      ] };
+    }
+  }
+  if (S.manualLockDate === todayKey()) {
+    return { cmd: 'BLOCK', reasons: ['You ended your day. The gate reopens tomorrow.'] };
+  }
+  const dl = dailyPL();
+  const official$ = limit$(st.dailyLoss);
+  const personal$ = personalDaily$();
+  if (dl <= -official$) {
+    cmd = 'BLOCK';
+    reasons.push(`OFFICIAL daily loss limit breached (${fmt$(dl)} ≤ ${fmt$(-official$)}). By prop rules the account is likely already failed.`);
+  } else if (dl <= -personal$) {
+    cmd = 'BLOCK';
+    reasons.push(`Personal daily cap hit (${fmt$(dl)} ≤ ${fmt$(-personal$)}). The buffer just saved the account — done for today.`);
+  } else if (personal$ > 0 && dl <= -personal$ * 0.8) {
+    cmd = 'BLOCK';
+    reasons.push(`${Math.round(-dl / personal$ * 100)}% of your daily cap is used (${fmt$(dl)}). Above 80%, the rule is: stop for the day.`);
+  }
+  if (tradesToday().length >= st.maxTradesPerDay) {
+    cmd = 'BLOCK';
+    reasons.push(`Max trades reached (${tradesToday().length}/${st.maxTradesPerDay}). Quality over quantity.`);
+  }
+  if (consecLosses() >= st.maxConsecLosses) {
+    cmd = 'BLOCK';
+    reasons.push(`${consecLosses()} consecutive losses. The market is telling you something — stop and review.`);
+  }
+  if (cmd === 'ALLOW') {
+    const ll = lastLossAt();
+    if (ll) {
+      const mins = (Date.now() - ll) / 60000;
+      if (mins < st.cooldownMin) {
+        cmd = 'WAIT';
+        reasons.push(`Cooldown after a loss: ${Math.ceil(st.cooldownMin - mins)} min left. Revenge trades die here.`);
+      }
+    }
+  }
+  if (cmd !== 'BLOCK' && personal$ > 0 && capUsedFrac() >= 0.6 && capUsedFrac() < 0.8) {
+    reasons.push(`⚠ 60–80% of your daily cap is used (incl. open-trade risk) — reduce size; new tickets are auto-halved.`);
+  }
+  if (cmd === 'ALLOW') {
+    const worst = dl - openRisk();
+    if (personal$ > 0 && worst <= -personal$) {
+      cmd = 'WAIT';
+      reasons.push(`Open positions risk ${fmt$(openRisk())} — worst case ${fmt$(worst)} breaches your daily cap. Floating losses count; manage open trades before adding more.`);
+      return { cmd, reasons };
+    }
+    reasons.push('All discipline gates passed. Take only your setup.');
+    if (isProp() && totalPL() >= limit$(S.settings.profitTarget)) {
+      reasons.push(`🎯 Profit target reached (${fmt$(totalPL())}). Protect it — consider stopping.`);
+    }
+  }
+  return { cmd, reasons };
+}
+
+/* ---------- actions ---------- */
+function openTrade() {
+  const g = gate();
+  if (g.cmd !== 'ALLOW') { S.blockedAttempts++; save(); renderAll(); return; }
+  const sym = document.getElementById('tSym').value.trim().toUpperCase();
+  const dir = document.getElementById('tDir').value;
+  const slPips = parseFloat(document.getElementById('tSL').value);
+  const tpPips = parseFloat(document.getElementById('tTP').value) || null;
+  const entry = parseFloat(document.getElementById('tEntry').value) || null;
+  if (!sym || !isFinite(slPips) || slPips <= 0) return;
+  const st = S.settings;
+  if (st.minRR > 0 && (!tpPips || tpPips / slPips < st.minRR)) return;
+
+  const t = computeLots(slPips);
+  if (!t.ok || t.lots <= 0) return;
+  S.trades.push({
+    id: Date.now() + '' + Math.floor(Math.random() * 1000),
+    sym, dir, slPips, tpPips, entry,
+    lots: t.lots, pipVal: t.pipVal,
+    riskAmt: t.actualRisk,
+    openedAt: Date.now(), closedAt: null, exit: null, r: null, pl: null
+  });
+  save();
+  ['tSym', 'tSL', 'tTP', 'tEntry'].forEach(id => document.getElementById(id).value = '');
+  document.querySelectorAll('.ck').forEach(c => c.checked = false);
+  show('journal');
+}
+
+function closeTrade(id) {
+  const t = S.trades.find(x => x.id === id);
+  const inp = document.getElementById('exit-' + id);
+  const val = parseFloat(inp.value);
+  if (!t || !isFinite(val)) return;
+  let r;
+  if (t.slPips) {
+    // Pip-based trade: result entered in signed pips (+45 win, -20 loss).
+    r = val / t.slPips;
+    t.exit = val;
+  } else {
+    // Legacy price-based trade: result entered as exit price.
+    const riskDist = Math.abs(t.entry - t.stop);
+    r = t.dir === 'long' ? (val - t.entry) / riskDist : (t.entry - val) / riskDist;
+    t.exit = val;
+  }
+  t.r = Math.round(r * 100) / 100;
+  t.pl = Math.round(t.r * t.riskAmt * 100) / 100;
+  t.closedAt = Date.now();
+  save(); renderAll();
+}
+
+function endDay() {
+  if (!confirm('Lock yourself out until tomorrow?')) return;
+  S.manualLockDate = todayKey();
+  S.lastLockNotify = 0;
+  save(); renderAll();
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission().then(() => lockReminderTick(true));
+  } else {
+    lockReminderTick(true);
+  }
+}
+
+/* ---------- lock-out reminders ----------
+   While the app is open (or installed and in the background), it keeps
+   checking in so you don't talk yourself back into trading. */
+function notify(title, body) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return false;
+  const opts = { body, icon: undefined, tag: 'tradegate-lock', renotify: true };
+  if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+    navigator.serviceWorker.ready.then(reg => reg.showNotification(title, opts)).catch(() => new Notification(title, opts));
+  } else {
+    try { new Notification(title, opts); } catch { return false; }
+  }
+  return true;
+}
+
+const LOCK_MESSAGES = [
+  'Still locked. You decided this when you were thinking clearly — trust that version of you.',
+  'The market will open again tomorrow. Your discipline is the edge today.',
+  'No trade you take today will fix today. Stay out.',
+  'Checking in: gate is locked. Close the platform if it\'s open.',
+  'Funded traders are the ones who could stop. You stopped. Well done — keep it that way.',
+];
+
+function lockReminderTick(immediate = false) {
+  if (S.manualLockDate !== todayKey()) return;
+  const intervalMs = (S.settings.lockReminderMin || 30) * 60000;
+  const due = immediate || (Date.now() - (S.lastLockNotify || 0) >= intervalMs);
+  if (!due) return;
+  const msg = immediate
+    ? 'Locked until tomorrow. I\'ll check in so you stay out. 🔒'
+    : LOCK_MESSAGES[Math.floor(Math.random() * LOCK_MESSAGES.length)];
+  if (notify('TradeGate — you are done for today', msg)) {
+    S.lastLockNotify = Date.now();
+    save();
+  }
+}
+setInterval(() => lockReminderTick(false), 60000);
+
+/* ---------- prop plan calculator ----------
+   Single source of truth: the Prop Plan edits S.settings directly (always in
+   percent, like prop firms quote their rules), so the Gate, Settings and this
+   tab can never disagree. */
+function renderProp() {
+  const host = document.getElementById('propOut');
+  if (!host) return;
+  const st = S.settings;
+  const p = S.prop;
+  st.accountSize = parseFloat(document.getElementById('pSize').value) || st.accountSize;
+  st.dailyLoss = parseFloat(document.getElementById('pDaily').value) || st.dailyLoss;
+  st.maxDrawdown = parseFloat(document.getElementById('pMaxDD').value) || st.maxDrawdown;
+  st.bufferPct = Math.min(100, Math.max(30, parseFloat(document.getElementById('pBufferPct').value) || st.bufferPct));
+  st.limitsUnit = 'pct';   // the Prop Plan always works in percent
+  p.buffer = Math.max(1, Math.round(parseFloat(document.getElementById('pBuffer').value) || p.buffer));
+  p.pipVal = parseFloat(document.getElementById('pPipVal').value) || p.pipVal;
+  p.stop = parseFloat(document.getElementById('pStop').value) || p.stop;
+  save();
+
+  const official$ = st.accountSize * st.dailyLoss / 100;
+  const maxDD$ = st.accountSize * st.maxDrawdown / 100;
+  const safe$ = official$ * st.bufferPct / 100;
+
+  // Live $ equivalents, shown the way the FundedNext doc calculates them.
+  document.getElementById('pDailyHint').textContent =
+    `= ${fmt$(official$)} (${st.dailyLoss}% × ${fmt$(st.accountSize)}) — fixed from initial balance, resets at midnight, counts floating losses`;
+  document.getElementById('pMaxDDHint').textContent =
+    `= ${fmt$(maxDD$)} — absolute equity floor: ${fmt$(st.accountSize - maxDD$)}`;
+  // Risk so the SAFE daily cap survives `buffer` straight losses, and the
+  // whole account survives at least 10 losses.
+  const risk$ = Math.min(safe$ / p.buffer, maxDD$ / 10);
+  const riskPct = risk$ / st.accountSize * 100;
+  const lots = Math.max(0.01, Math.floor(risk$ / (p.stop * p.pipVal) * 100) / 100);
+  const maxStopAtLots = risk$ / (lots * p.pipVal);
+  const maxStopMinLot = risk$ / (0.01 * p.pipVal);
+  const survivableDays = Math.floor(maxDD$ / safe$);
+
+  const table = [Math.round(p.stop / 2), p.stop, p.stop * 2, p.stop * 3]
+    .filter((v, i, a) => v > 0 && a.indexOf(v) === i)
+    .map(sp => {
+      const l = Math.max(0.01, Math.floor(risk$ / (sp * p.pipVal) * 100) / 100);
+      return `<div>• Stop ${sp} pips → <b>${l.toFixed(2)} lots</b></div>`;
+    }).join('');
+
+  host.innerHTML = `
+    <div class="big">${lots.toFixed(2)} lots</div>
+    <div>for your ${p.stop}-pip stop, risking <b>${fmt$(risk$)}</b> per trade (${riskPct.toFixed(2)}% of account)</div>
+    <div style="margin-top:8px"><b>Daily caps:</b> official ${fmt$(official$)} → your safe cap <b>${fmt$(safe$)}</b> (${st.bufferPct}% buffer —
+      room for slippage, spread widening and floating drawdown).</div>
+    <div style="margin-top:8px"><b>Stop loss you can accommodate:</b> up to ${maxStopAtLots.toFixed(0)} pips at ${lots.toFixed(2)} lots,
+      or up to ${maxStopMinLot.toFixed(0)} pips at the minimum 0.01 lots.</div>
+    <div style="margin-top:8px"><b>Lot size per stop distance (same ${fmt$(risk$)} risk):</b></div>${table}
+    <div style="margin-top:8px"><b>When to stop (action levels on your ${fmt$(safe$)} cap):</b></div>
+    <div>• Down ${fmt$(safe$ * 0.6)} (60%) → reduce size — the Gate auto-halves new tickets.</div>
+    <div>• Down ${fmt$(safe$ * 0.8)} (80%) → stop for the day — the Gate blocks.</div>
+    <div>• ${p.buffer} losses in a row → stop, whatever the total.</div>
+    <div>• Floating losses count: open-trade risk is part of the cap, exactly like the firm measures equity.</div>
+    <div>• Daily safe cap ${fmt$(safe$)} · total drawdown ${fmt$(maxDD$)} — at worst you survive <b>${survivableDays} max-loss days</b>.</div>
+    <div>• Never raise lots after a loss. The plan is the plan.</div>`;
+}
+
+function applyPropPlan() {
+  const st = S.settings;
+  const p = S.prop;
+  const official$ = st.accountSize * st.dailyLoss / 100;
+  const maxDD$ = st.accountSize * st.maxDrawdown / 100;
+  const safe$ = official$ * st.bufferPct / 100;
+  const risk$ = Math.min(safe$ / p.buffer, maxDD$ / 10);
+  if (st.accountType === 'personal') st.accountType = 'prop_challenge';
+  st.riskPct = Math.max(0.05, Math.round(risk$ / st.accountSize * 10000) / 100);
+  st.maxConsecLosses = p.buffer;
+  save(); renderAll(); show('gate');
+}
+
+function togglePropFields() {
+  const prop = document.getElementById('sAccountType').value !== 'personal';
+  document.querySelectorAll('.prop-only').forEach(el => el.style.display = prop ? 'block' : 'none');
+}
+
+function saveSettings() {
+  const st = S.settings;
+  const num = (id, lo, hi, fallback) => {
+    const v = parseFloat(document.getElementById(id).value);
+    return isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fallback;
+  };
+  st.accountType = document.getElementById('sAccountType').value;
+  st.limitsUnit = document.getElementById('sLimitsUnit').value;
+  st.accountSize = num('sAccountSize', 1, 100000000, st.accountSize);
+  st.riskPct = num('sRisk', 0.05, 10, st.riskPct);
+  st.dailyLoss = num('sDaily', 0.1, st.limitsUnit === 'pct' ? 100 : 100000000, st.dailyLoss);
+  st.bufferPct = Math.round(num('sBuffer', 30, 100, st.bufferPct));
+  st.maxDrawdown = num('sMaxDD', 0.1, st.limitsUnit === 'pct' ? 100 : 100000000, st.maxDrawdown);
+  st.profitTarget = num('sTarget', 0.1, st.limitsUnit === 'pct' ? 1000 : 100000000, st.profitTarget);
+  st.maxTradesPerDay = Math.round(num('sMaxTrades', 1, 50, st.maxTradesPerDay));
+  st.maxConsecLosses = Math.round(num('sMaxLoss', 1, 20, st.maxConsecLosses));
+  st.cooldownMin = Math.round(num('sCooldown', 0, 480, st.cooldownMin));
+  st.minRR = num('sMinRR', 0, 20, st.minRR);
+  st.lockReminderMin = Math.round(num('sLockRem', 15, 120, st.lockReminderMin));
+  const lines = document.getElementById('sChecklist').value
+    .split('\n').map(s => s.trim()).filter(Boolean).slice(0, 10);
+  if (lines.length) st.checklist = lines;
+  save(); renderAll(); show('gate');
+}
+
+function resetAll() {
+  if (!confirm('Delete ALL trades and settings? This cannot be undone.')) return;
+  S = structuredClone(DEFAULTS);
+  localStorage.removeItem(OLD_KEY);
+  save(); renderAll();
+}
+
+/* ---------- rendering ---------- */
+function show(view) {
+  ['gate', 'prop', 'journal', 'stats', 'settings'].forEach(v => {
+    document.getElementById('view-' + v).style.display = v === view ? '' : 'none';
+    document.getElementById('tab-' + v).classList.toggle('active', v === view);
+  });
+  renderAll();
+}
+
+function renderAll() {
+  renderChecklist(); renderGate(); renderTicket(); renderJournal(); renderStats(); renderSettings(); fillProp();
+}
+
+function fillProp() {
+  const st = S.settings;
+  const p = S.prop;
+  if (!document.getElementById('pSize')) return;
+  // If limits were stored as $ (old data / Settings choice), convert to %.
+  if (st.limitsUnit === 'usd' && st.accountSize > 0) {
+    st.dailyLoss = Math.round(st.dailyLoss / st.accountSize * 10000) / 100;
+    st.maxDrawdown = Math.round(st.maxDrawdown / st.accountSize * 10000) / 100;
+    st.profitTarget = Math.round(st.profitTarget / st.accountSize * 10000) / 100;
+    st.limitsUnit = 'pct';
+    save();
+  }
+  document.getElementById('pSize').value = st.accountSize;
+  document.getElementById('pMaxDD').value = st.maxDrawdown;
+  document.getElementById('pDaily').value = st.dailyLoss;
+  document.getElementById('pBufferPct').value = st.bufferPct;
+  document.getElementById('pBuffer').value = p.buffer;
+  document.getElementById('pPipVal').value = p.pipVal;
+  document.getElementById('pStop').value = p.stop;
+  renderProp();
+}
+
+function renderChecklist() {
+  const host = document.getElementById('checklist');
+  const states = [...host.querySelectorAll('.ck')].map(c => c.checked);
+  host.innerHTML = S.settings.checklist.map((item, i) => `
+    <label class="check"><input type="checkbox" class="ck" ${states[i] ? 'checked' : ''} onchange="renderTicket()"><span>${item.replace(/</g, '&lt;')}</span></label>
+  `).join('');
+}
+
+function renderGate() {
+  const g = gate();
+  document.getElementById('gateStatus').innerHTML = `
+    <div class="gate-status gate-${g.cmd}">
+      <div class="cmd">${g.cmd}</div>
+      <div class="sub">${g.cmd === 'ALLOW' ? 'You may trade — if it\'s your setup.' : g.cmd === 'WAIT' ? 'Breathe. The market will still be there.' : 'No trading. Protect the account.'}</div>
+      <ul class="reasons">${g.reasons.map(r => `<li>${r}</li>`).join('')}</ul>
+    </div>`;
+
+  const st = S.settings;
+  const dl = dailyPL();
+  const dailyLimit = limit$(st.dailyLoss);
+  const personal = personalDaily$();
+  const capFrac = Math.min(1, capUsedFrac());
+  const tt = tradesToday().length;
+  const cl = consecLosses();
+  const eq = equity();
+
+  let html = `
+    <div class="limit"><div class="lbl">Equity</div><div class="val ${eq >= st.accountSize ? 'ok' : 'warn'}">${fmt$(eq)}</div></div>
+    <div class="limit"><div class="lbl">Today's P/L</div><div class="val ${dl > 0 ? 'ok' : dl < 0 ? 'bad' : ''}">${fmt$(dl)}</div></div>
+    <div class="limit"><div class="lbl">Official daily limit</div><div class="val">${fmt$(-dailyLimit)}</div></div>
+    <div class="limit"><div class="lbl">Personal cap (${st.bufferPct}%)</div><div class="val ${capFrac >= 0.8 ? 'bad' : capFrac >= 0.6 ? 'warn' : ''}">${fmt$(-personal)}</div>
+      <div class="bar"><div style="width:${capFrac * 100}%;background:var(--${capFrac >= 0.8 ? 'red' : capFrac >= 0.6 ? 'amber' : 'green'})"></div></div></div>
+    <div class="limit"><div class="lbl">Open-trade risk</div><div class="val ${openRisk() > 0 ? 'warn' : 'ok'}">${fmt$(openRisk())}</div></div>
+    <div class="limit"><div class="lbl">Trades today</div><div class="val ${tt >= st.maxTradesPerDay ? 'bad' : ''}">${tt} / ${st.maxTradesPerDay}</div></div>
+    <div class="limit"><div class="lbl">Consec. losses</div><div class="val ${cl >= st.maxConsecLosses ? 'bad' : cl > 0 ? 'warn' : 'ok'}">${cl} / ${st.maxConsecLosses}</div></div>`;
+
+  if (isProp()) {
+    const floor = st.accountSize - limit$(st.maxDrawdown);
+    const ddRoom = eq - floor;
+    const ddTotal = limit$(st.maxDrawdown);
+    const tgt = limit$(st.profitTarget);
+    const prog = Math.max(0, Math.min(1, totalPL() / tgt));
+    html += `
+    <div class="limit"><div class="lbl">Drawdown room left</div><div class="val ${ddRoom <= ddTotal * 0.3 ? 'bad' : ddRoom <= ddTotal * 0.6 ? 'warn' : 'ok'}">${fmt$(ddRoom)}</div>
+      <div class="bar"><div style="width:${Math.max(0, Math.min(100, ddRoom / ddTotal * 100))}%;background:var(--${ddRoom <= ddTotal * 0.3 ? 'red' : 'green'})"></div></div></div>
+    <div class="limit"><div class="lbl">Target progress</div><div class="val ${prog >= 1 ? 'ok' : ''}">${fmt$(totalPL())} / ${fmt$(tgt)}</div>
+      <div class="bar"><div style="width:${prog * 100}%;background:var(--blue)"></div></div></div>`;
+  }
+  document.getElementById('limits').innerHTML = html;
+  document.getElementById('limitsTitle').textContent =
+    isProp() ? (st.accountType === 'prop_challenge' ? 'Prop Challenge Limits' : 'Funded Account Limits') : "Today's Limits";
+}
+
+function renderTicket() {
+  const g = gate();
+  const allowed = g.cmd === 'ALLOW';
+  document.getElementById('ticketCard').style.opacity = allowed ? 1 : 0.45;
+  const checks = [...document.querySelectorAll('.ck')].every(c => c.checked);
+  const slPips = parseFloat(document.getElementById('tSL').value);
+  const tpPips = parseFloat(document.getElementById('tTP').value);
+  const sym = document.getElementById('tSym').value.trim();
+  const box = document.getElementById('sizeBox');
+  const st = S.settings;
+  document.getElementById('targetLbl').textContent = st.minRR > 0 ? `Take profit (pips, ≥${st.minRR}R)` : 'Take profit (pips, opt.)';
+  document.getElementById('pipValHint').textContent =
+    `Lots are sized with ${fmt$(S.prop.pipVal || 10)} per pip per 1.00 lot — change the instrument on the Prop Plan tab.`;
+
+  let valid = false, rrOK = true;
+  if (isFinite(slPips) && slPips > 0) {
+    const t = computeLots(slPips);
+    valid = t.ok;
+    let rr = '';
+    if (isFinite(tpPips) && tpPips > 0) {
+      const rrv = tpPips / slPips;
+      const minNote = st.minRR > 0
+        ? (rrv >= st.minRR ? ` <span class="rr-ok">✓ meets your ${st.minRR}R minimum</span>` : ` <span class="rr-bad">✗ below your ${st.minRR}R minimum</span>`)
+        : (rrv < 1.5 ? ' — below 1.5, is it worth it?' : '');
+      rr = `<div>Reward : Risk = <b>${rrv.toFixed(2)} : 1</b> (TP ${tpPips}p / SL ${slPips}p)${minNote}</div>`;
+      if (st.minRR > 0 && rrv < st.minRR) rrOK = false;
+    } else if (st.minRR > 0) {
+      rrOK = false;
+      rr = `<div class="rr-bad">Your rules require a take profit of at least ${st.minRR}R (≥ ${Math.ceil(slPips * st.minRR)} pips for this stop).</div>`;
+    }
+    box.style.display = 'block';
+    box.innerHTML = `
+      <div class="big">${t.lots.toFixed(2)} lots</div>
+      <div>Risking ${fmt$(t.actualRisk)} at ${slPips} pips × ${fmt$(t.pipVal)}/pip/lot</div>
+      ${t.note ? `<div class="rr-bad">${t.note}</div>` : ''}
+      ${rr}`;
+  } else {
+    box.style.display = 'none';
+  }
+  document.getElementById('openBtn').disabled = !(allowed && checks && valid && sym && rrOK);
+}
+
+/* Lots from the user's SL pips: budgeted risk ÷ (SL pips × $/pip/lot),
+   floored to broker 0.01 steps. */
+function computeLots(slPips) {
+  const st = S.settings;
+  const pipVal = S.prop.pipVal || 10;
+  const tr = ticketRisk(equity() * st.riskPct / 100);
+  let lots = Math.floor(tr.risk / (slPips * pipVal) * 100) / 100;
+  let note = tr.note || '';
+  let ok = tr.risk > 0;
+  if (ok && lots < 0.01) {
+    const minRisk = 0.01 * slPips * pipVal;
+    if (minRisk <= tr.remaining) {
+      lots = 0.01;
+      note += ` Rounded up to the 0.01 minimum lot — actual risk ${fmt$(minRisk)}.`;
+    } else {
+      ok = false;
+      lots = 0;
+      note += ` Even 0.01 lots would risk ${fmt$(minRisk)}, more than your remaining daily budget (${fmt$(tr.remaining)}). Tighten the stop or stop trading.`;
+    }
+  }
+  const actualRisk = Math.round(lots * slPips * pipVal * 100) / 100;
+  return { ok, lots, actualRisk, pipVal, note: note.trim() };
+}
+
+function tradeRow(t, open) {
+  const dirCls = t.dir === 'long' ? 'dir-long' : 'dir-short';
+  const when = new Date(open ? t.openedAt : t.closedAt).toLocaleString();
+  const res = open
+    ? `<div class="closer"><input id="exit-${t.id}" type="number" step="any" inputmode="decimal" placeholder="${t.slPips ? 'Result in pips (e.g. -20 or 45)' : 'Exit price'}"><button class="small" onclick="closeTrade('${t.id}')">Close</button></div>`
+    : '';
+  const badge = open
+    ? '<span class="result r-flat">OPEN</span>'
+    : `<span class="result ${t.r > 0 ? 'r-pos' : t.r < 0 ? 'r-neg' : 'r-flat'}">${fmtR(t.r)} · ${fmt$(t.pl)}</span>`;
+  const meta = t.slPips
+    ? `SL ${t.slPips}p${t.tpPips ? ' · TP ' + t.tpPips + 'p' : ''}${t.entry ? ' · Entry ' + t.entry : ''}${!open && t.exit != null ? ' · Result ' + t.exit + 'p' : ''} · <b>${t.lots.toFixed(2)} lots</b> · risk ${fmt$(t.riskAmt)}`
+    : `Entry ${t.entry} · Stop ${t.stop}${t.target ? ' · Target ' + t.target : ''}${t.exit != null ? ' · Exit ' + t.exit : ''} · ${t.units} units · risk ${fmt$(t.riskAmt)}`;
+  return `<div class="trade">
+    <div class="top"><span><span class="sym">${t.sym}</span> <span class="${dirCls}">${t.dir.toUpperCase()}</span></span>${badge}</div>
+    <div class="meta">${meta}</div>
+    <div class="meta">${when}</div>
+    ${res}</div>`;
+}
+
+function renderJournal() {
+  const o = openTrades(), c = closedTrades().slice().reverse();
+  document.getElementById('openList').innerHTML = o.length ? o.map(t => tradeRow(t, true)).join('') : '<div class="empty">No open trades.</div>';
+  document.getElementById('closedList').innerHTML = c.length ? c.map(t => tradeRow(t, false)).join('') : '<div class="empty">No closed trades yet.</div>';
+}
+
+function renderStats() {
+  const c = closedTrades();
+  const grid = document.getElementById('statGrid');
+  const bars = document.getElementById('bars');
+  if (!c.length) {
+    grid.innerHTML = '<div class="empty" style="grid-column:1/-1">Close some trades to see stats.</div>';
+    bars.innerHTML = '';
+  } else {
+    const wins = c.filter(t => t.r > 0).length;
+    const totalR = c.reduce((s, t) => s + t.r, 0);
+    const tPL = totalPL();
+    const avgR = totalR / c.length;
+    grid.innerHTML = `
+      <div class="limit"><div class="lbl">Trades</div><div class="val">${c.length}</div></div>
+      <div class="limit"><div class="lbl">Win rate</div><div class="val">${(wins / c.length * 100).toFixed(0)}%</div></div>
+      <div class="limit"><div class="lbl">Total R</div><div class="val ${totalR >= 0 ? 'ok' : 'bad'}">${fmtR(totalR)}</div></div>
+      <div class="limit"><div class="lbl">Avg R</div><div class="val ${avgR >= 0 ? 'ok' : 'bad'}">${fmtR(avgR)}</div></div>
+      <div class="limit"><div class="lbl">Net P/L</div><div class="val ${tPL >= 0 ? 'ok' : 'bad'}">${fmt$(tPL)}</div></div>
+      <div class="limit"><div class="lbl">Equity</div><div class="val">${fmt$(equity())}</div></div>`;
+    const maxAbs = Math.max(...c.map(t => Math.abs(t.r)), 1);
+    bars.innerHTML = c.slice(-40).map(t =>
+      `<div class="bar2" style="height:${Math.max(6, Math.abs(t.r) / maxAbs * 90)}px;background:${t.r >= 0 ? 'var(--green)' : 'var(--red)'}" title="${t.sym} ${fmtR(t.r)}"></div>`
+    ).join('');
+  }
+  const days = new Set(c.map(t => todayKey(t.closedAt))).size || 1;
+  document.getElementById('discGrid').innerHTML = `
+    <div class="limit"><div class="lbl">Blocked attempts</div><div class="val ${S.blockedAttempts ? 'warn' : 'ok'}">${S.blockedAttempts}</div></div>
+    <div class="limit"><div class="lbl">Trades / day (avg)</div><div class="val">${(c.length / days).toFixed(1)}</div></div>
+    <div class="limit"><div class="lbl">Days traded</div><div class="val">${days}</div></div>`;
+}
+
+function renderSettings() {
+  const st = S.settings;
+  document.getElementById('sAccountType').value = st.accountType;
+  document.getElementById('sAccountSize').value = st.accountSize;
+  document.getElementById('sLimitsUnit').value = st.limitsUnit;
+  document.getElementById('sRisk').value = st.riskPct;
+  document.getElementById('sDaily').value = st.dailyLoss;
+  document.getElementById('sBuffer').value = st.bufferPct;
+  document.getElementById('sMaxDD').value = st.maxDrawdown;
+  document.getElementById('sTarget').value = st.profitTarget;
+  document.getElementById('sMaxTrades').value = st.maxTradesPerDay;
+  document.getElementById('sMaxLoss').value = st.maxConsecLosses;
+  document.getElementById('sCooldown').value = st.cooldownMin;
+  document.getElementById('sMinRR').value = st.minRR;
+  document.getElementById('sLockRem').value = st.lockReminderMin;
+  document.getElementById('sChecklist').value = st.checklist.join('\n');
+  togglePropFields();
+}
+
+renderAll();
+setInterval(renderGate, 30000); // keep cooldown countdown fresh
+</script>
+</body>
+</html>
