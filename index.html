@@ -323,9 +323,10 @@
       <button class="danger" onclick="resetAll()">Reset everything (delete all data)</button>
     </div>
     <div class="card">
-      <h2>News (Finnhub)</h2>
-      <label>Finnhub API key</label><input id="sFinnhub" type="text" placeholder="paste your free finnhub.io key" autocomplete="off">
-      <p class="hint">The only external call this app makes. Get a free key at finnhub.io. Scheduled blackout windows need Finnhub's paid Economic Calendar; a free key falls back to the headline feed.</p>
+      <h2>News &amp; Economic Calendar</h2>
+      <p class="hint">The economic calendar is <b>free and automatic</b> — real scheduled events with blackout windows, no key needed (updated a few times a day from ForexFactory via GitHub).</p>
+      <label>Finnhub API key (optional — adds live headlines)</label><input id="sFinnhub" type="text" placeholder="optional: paste a free finnhub.io key" autocomplete="off">
+      <p class="hint">Only used as a fallback if the calendar file can't be reached. Not required.</p>
       <div class="row3">
         <div><label>Blackout window (± min)</label><input id="sNewsBlackout" type="number" step="5"></div>
         <div><label>Avoid impact</label>
@@ -708,47 +709,63 @@ function parseNewsItem(n) {
            url: n.url, source: n.source, feed: true };
 }
 
+/* ForexFactory weekly calendar item — country IS the currency code,
+   date is ISO with timezone, impact is High/Medium/Low/Holiday. */
+function parseFFEvent(e) {
+  const cur = String(e.country || '').toUpperCase();
+  const epoch = e.date ? Date.parse(e.date) : null;
+  const isHoliday = String(e.impact || '').toLowerCase() === 'holiday';
+  return { cur, name: e.title || 'Event', impact: isHoliday ? 'low' : normImpact(e.impact),
+           epoch: isFinite(epoch) ? epoch : null, allDay: isHoliday,
+           forecast: e.forecast, previous: e.previous, feed: false };
+}
+function isToday(epoch) {
+  if (!epoch) return false;
+  return new Date(epoch).toDateString() === new Date().toDateString();
+}
+
 let newsLoading = false;
 async function fetchNews(force = false) {
   const st = S.settings;
-  const key = (st.finnhubKey || '').trim();
   const today = todayKey();
-  if (!force && S.newsCache.date === today && S.newsCache.mode) { renderNews(); return S.newsCache; }
-  if (!key) {
-    S.newsCache = { date: today, mode: 'nokey', events: [], fetchedAt: Date.now(),
-      error: 'No Finnhub API key set — add one in Settings to enable news.' };
-    save(); renderAll(); return S.newsCache;
+  if (!force && S.newsCache.date === today && S.newsCache.mode && S.newsCache.mode !== 'nodata') {
+    renderNews(); return S.newsCache;
   }
-  newsLoading = true; setNewsStatus('Loading…');
+  newsLoading = true; setNewsStatus('Loading…'); renderNews();
+
+  // 1) FREE economic calendar — a same-origin calendar.json kept fresh by a
+  //    GitHub Action (real scheduled times, no key, no CORS, no cost).
   try {
-    const url = `https://finnhub.io/api/v1/calendar/economic?from=${today}&to=${today}&token=${encodeURIComponent(key)}`;
-    const r = await fetch(url);
+    const r = await fetch('calendar.json?t=' + Date.now(), { cache: 'no-store' });
     if (r.ok) {
-      const j = await r.json();
-      const raw = j.economicCalendar || j.economic_calendar || [];
-      if (Array.isArray(raw)) {
-        S.newsCache = { date: today, mode: 'calendar', events: raw.map(parseCalEvent).filter(Boolean),
-          fetchedAt: Date.now(), error: null };
+      const arr = await r.json();
+      if (Array.isArray(arr) && arr.length) {
+        S.newsCache = { date: today, mode: 'calendar', source: 'forexfactory',
+          events: arr.map(parseFFEvent).filter(Boolean), fetchedAt: Date.now(), error: null };
         save(); newsLoading = false; renderAll(); return S.newsCache;
       }
     }
-    throw new Error('calendar ' + r.status);
-  } catch (e1) {
+  } catch (e) { /* fall through */ }
+
+  // 2) OPTIONAL: Finnhub live headlines (only if a key is set) — no scheduled times.
+  const key = (st.finnhubKey || '').trim();
+  if (key) {
     try {
       const r = await fetch(`https://finnhub.io/api/v1/news?category=general&token=${encodeURIComponent(key)}`);
-      if (!r.ok) throw new Error('news ' + r.status);
-      const arr = await r.json();
-      S.newsCache = { date: today, mode: 'feed',
-        events: (Array.isArray(arr) ? arr : []).slice(0, 60).map(parseNewsItem).filter(Boolean),
-        fetchedAt: Date.now(),
-        error: 'Economic Calendar needs a paid Finnhub plan — showing the free headline feed (no scheduled times, so no future blackout windows).' };
-      save(); newsLoading = false; renderAll(); return S.newsCache;
-    } catch (e2) {
-      S.newsCache = { date: today, mode: 'error', events: [], fetchedAt: Date.now(),
-        error: 'News fetch failed: ' + (e2.message || e2) + '. Check the key / connection.' };
-      save(); newsLoading = false; renderAll(); return S.newsCache;
-    }
+      if (r.ok) {
+        const arr = await r.json();
+        S.newsCache = { date: today, mode: 'feed', source: 'finnhub',
+          events: (Array.isArray(arr) ? arr : []).slice(0, 60).map(parseNewsItem).filter(Boolean),
+          fetchedAt: Date.now(),
+          error: 'Calendar file not reachable — showing Finnhub headlines instead (no scheduled times).' };
+        save(); newsLoading = false; renderAll(); return S.newsCache;
+      }
+    } catch (e) { /* fall through */ }
   }
+
+  S.newsCache = { date: today, mode: 'nodata', events: [], fetchedAt: Date.now(),
+    error: 'Could not load the calendar yet. It auto-updates on GitHub Pages — try Refresh, or check your connection.' };
+  save(); newsLoading = false; renderAll(); return S.newsCache;
 }
 
 function avoidImpacts() { return S.settings.newsAvoidImpact === 'high_medium' ? ['high', 'medium'] : ['high']; }
@@ -950,14 +967,9 @@ function renderNews() {
   if (!banner) return;
   const c = S.newsCache, st = S.settings, now = Date.now(), bo = st.newsBlackoutMin || 30;
 
-  if (!c.mode || c.mode === 'nokey') {
-    banner.innerHTML = `<div class="gate-status gate-WAIT"><div class="cmd" style="font-size:22px">NEWS OFF</div><div class="sub">Add a free Finnhub API key in Settings to enable news.</div></div>`;
-    avoid.innerHTML = '<div class="empty">No key set.</div>'; lower.innerHTML = ''; setNewsStatus(c.error || '');
-    return;
-  }
-  if (c.mode === 'error') {
-    banner.innerHTML = `<div class="gate-status gate-BLOCK"><div class="cmd" style="font-size:22px">NEWS ERROR</div><div class="sub">${c.error || ''}</div></div>`;
-    avoid.innerHTML = ''; lower.innerHTML = ''; setNewsStatus('');
+  if (!c.mode || c.mode === 'nodata') {
+    banner.innerHTML = `<div class="gate-status gate-WAIT"><div class="cmd" style="font-size:22px">${newsLoading ? 'LOADING…' : 'NO CALENDAR YET'}</div><div class="sub">${c.error || 'Loading the economic calendar…'}</div></div>`;
+    avoid.innerHTML = ''; lower.innerHTML = ''; setNewsStatus(c.error || '');
     return;
   }
 
@@ -977,15 +989,17 @@ function renderNews() {
   if (st.newsGate === 'no') sub += ' (Gate is info-only.)';
   banner.innerHTML = `<div class="gate-status ${cls}"><div class="cmd" style="font-size:26px">${head}</div><div class="sub">${sub}</div></div>`;
 
+  // Calendar mode covers the whole week — show today's events only.
+  const display = c.mode === 'calendar' ? c.events.filter(e => isToday(e.epoch)) : c.events;
   const want = avoidImpacts();
-  const hi = c.events.filter(e => want.includes(e.impact)).sort((a, b) => (a.epoch || 0) - (b.epoch || 0));
-  const lo = c.events.filter(e => !want.includes(e.impact)).sort((a, b) => (a.epoch || 0) - (b.epoch || 0));
+  const hi = display.filter(e => want.includes(e.impact)).sort((a, b) => (a.epoch || 0) - (b.epoch || 0));
+  const lo = display.filter(e => !want.includes(e.impact)).sort((a, b) => (a.epoch || 0) - (b.epoch || 0));
   avoid.innerHTML = hi.length ? hi.map(e => newsRow(e, now, bo)).join('')
     : `<div class="empty">No ${want.join('/')}-impact events ${c.mode === 'feed' ? 'in the headline feed' : 'scheduled today'} for any currency.</div>`;
   lower.innerHTML = lo.length ? lo.slice(0, 15).map(e => newsRow(e, now, bo)).join('') : '<div class="empty">Nothing lower-impact to show.</div>';
 
-  const modeLbl = c.mode === 'calendar' ? 'Economic Calendar (scheduled times)'
-    : c.mode === 'feed' ? 'free headline feed' : c.mode;
+  const modeLbl = c.mode === 'calendar' ? 'ForexFactory weekly calendar (free, scheduled times)'
+    : c.mode === 'feed' ? 'Finnhub headline feed' : c.mode;
   setNewsStatus(`${newsLoading ? 'Loading… · ' : ''}Source: ${modeLbl}. Updated ${fmtClock(c.fetchedAt)}. Watching ${relevantCurrencies().join(', ')}.${c.error ? ' — ' + c.error : ''}`);
 }
 
@@ -1213,7 +1227,7 @@ function renderSettings() {
 renderAll();
 setInterval(renderGate, 30000);  // keep cooldown countdown fresh
 setInterval(() => { renderGate(); renderNews(); }, 60000);  // re-evaluate news window every minute
-if (S.settings.finnhubKey) fetchNews(false);   // one cached call per day on startup
+fetchNews(false);   // load the free economic calendar on startup (no key needed)
 </script>
 </body>
 </html>

@@ -1,0 +1,42 @@
+name: Update economic calendar
+
+# Fetches the free ForexFactory weekly calendar and commits it as calendar.json,
+# which GitHub Pages then serves same-origin to the app (no CORS, no key, no cost).
+
+on:
+  schedule:
+    - cron: '23 */3 * * *'   # every 3 hours
+  workflow_dispatch:          # manual "Run workflow" button
+  push:
+    branches: [main]          # also refresh on each push
+
+permissions:
+  contents: write
+
+concurrency:
+  group: calendar
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch ForexFactory calendar
+        run: |
+          curl -sSf "https://nfs.faireconomy.media/ff_calendar_thisweek.json" -o calendar.json
+          # fail the job if the response isn't valid JSON, so we never commit garbage
+          python3 -c "import json; json.load(open('calendar.json'))"
+
+      - name: Commit if changed
+        run: |
+          if ! git diff --quiet -- calendar.json; then
+            git config user.name "calendar-bot"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add calendar.json
+            git commit -m "chore: update economic calendar"
+            git push
+          else
+            echo "calendar.json unchanged — nothing to commit."
+          fi
