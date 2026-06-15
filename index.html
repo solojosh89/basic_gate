@@ -162,6 +162,7 @@
 
   <nav>
     <button id="tab-gate" class="active" onclick="show('gate')">Gate</button>
+    <button id="tab-news" onclick="show('news')">News</button>
     <button id="tab-prop" onclick="show('prop')">Prop Plan</button>
     <button id="tab-journal" onclick="show('journal')">Journal</button>
     <button id="tab-stats" onclick="show('stats')">Stats</button>
@@ -193,6 +194,23 @@
       <p class="hint" id="pipValHint"></p>
       <div class="sizebox" id="sizeBox"></div>
       <button class="primary" id="openBtn" onclick="openTrade()" disabled>Open Trade</button>
+    </div>
+  </section>
+
+  <!-- NEWS -->
+  <section id="view-news" style="display:none">
+    <div id="newsBanner"></div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h2 style="margin:0">Economic News — what to avoid, when to trade</h2>
+        <button class="small" onclick="fetchNews(true)">↻ Refresh</button>
+      </div>
+      <p class="hint" id="newsStatus"></p>
+      <div id="newsAvoid"></div>
+    </div>
+    <div class="card">
+      <h2>Lower-impact today</h2>
+      <div id="newsLower"></div>
     </div>
   </section>
 
@@ -304,6 +322,26 @@
       <button class="primary" onclick="saveSettings()">Save Rules</button>
       <button class="danger" onclick="resetAll()">Reset everything (delete all data)</button>
     </div>
+    <div class="card">
+      <h2>News (Finnhub)</h2>
+      <label>Finnhub API key</label><input id="sFinnhub" type="text" placeholder="paste your free finnhub.io key" autocomplete="off">
+      <p class="hint">The only external call this app makes. Get a free key at finnhub.io. Scheduled blackout windows need Finnhub's paid Economic Calendar; a free key falls back to the headline feed.</p>
+      <div class="row3">
+        <div><label>Blackout window (± min)</label><input id="sNewsBlackout" type="number" step="5"></div>
+        <div><label>Avoid impact</label>
+          <select id="sNewsImpact">
+            <option value="high">High only</option>
+            <option value="high_medium">High + medium</option>
+          </select>
+        </div>
+        <div><label>Block the Gate on news</label>
+          <select id="sNewsGate"><option value="yes">Yes</option><option value="no">No (info only)</option></select>
+        </div>
+      </div>
+      <label>Currencies to watch (comma separated)</label>
+      <input id="sWatchCur" type="text" placeholder="USD, EUR, GBP, JPY">
+      <p class="hint">When you type a symbol on the ticket (e.g. EURUSD) the Gate narrows to that pair's currencies automatically.</p>
+    </div>
     <p class="footer-note">All data stays in your browser (localStorage). Nothing is uploaded anywhere.</p>
   </section>
 </div>
@@ -326,6 +364,11 @@ const DEFAULTS = {
     minRR: 0,                    // 0 = off
     bufferPct: 70,               // personal daily cap = official limit × this %
     lockReminderMin: 30,         // lock-out reminder interval (minutes)
+    finnhubKey: '',              // the only external API
+    newsBlackoutMin: 30,         // ± minutes around a high-impact event
+    newsAvoidImpact: 'high',     // high | high_medium
+    newsGate: 'yes',             // yes = block the Gate during news; no = info only
+    watchCurrencies: ['USD', 'EUR', 'GBP', 'JPY'],
     checklist: [
       'This setup matches my written plan',
       'My stop loss is decided before entry',
@@ -336,7 +379,8 @@ const DEFAULTS = {
   blockedAttempts: 0,
   manualLockDate: null,
   lastLockNotify: 0,
-  prop: { buffer: 8, pipVal: 10, stop: 20 }   // plan-only inputs; limits live in settings
+  prop: { buffer: 8, pipVal: 10, stop: 20 },  // plan-only inputs; limits live in settings
+  newsCache: { date: null, mode: null, events: [], fetchedAt: 0, error: null }
 };
 
 let S = load();
@@ -471,6 +515,12 @@ function gate() {
     cmd = 'BLOCK';
     reasons.push(`${consecLosses()} consecutive losses. The market is telling you something — stop and review.`);
   }
+  const nb = activeNewsBlackout();
+  if (nb.state === 'active') {
+    cmd = 'BLOCK';
+    const when = nb.dMin >= 0 ? `in ${Math.max(0, Math.ceil(nb.dMin))} min` : `${Math.ceil(-nb.dMin)} min ago`;
+    reasons.push(`🗞 High-impact ${nb.cur || ''} news — ${nb.name} (${when}). No trading inside the ±${st.newsBlackoutMin}m window.`);
+  }
   if (cmd === 'ALLOW') {
     const ll = lastLossAt();
     if (ll) {
@@ -489,6 +539,11 @@ function gate() {
     if (personal$ > 0 && worst <= -personal$) {
       cmd = 'WAIT';
       reasons.push(`Open positions risk ${fmt$(openRisk())} — worst case ${fmt$(worst)} breaches your daily cap. Floating losses count; manage open trades before adding more.`);
+      return { cmd, reasons };
+    }
+    if (nb.state === 'soon') {
+      cmd = 'WAIT';
+      reasons.push(`🗞 High-impact ${nb.cur || ''} news — ${nb.name} in ${Math.ceil(nb.dMin)} min. Wait for it to pass (±${st.newsBlackoutMin}m window).`);
       return { cmd, reasons };
     }
     reasons.push('All discipline gates passed. Take only your setup.');
@@ -598,6 +653,140 @@ function lockReminderTick(immediate = false) {
 }
 setInterval(() => lockReminderTick(false), 60000);
 
+/* ---------- news (Finnhub) ----------
+   One cached call per day. Tries the Economic Calendar (scheduled times +
+   impact → real blackout windows); falls back to the free headline feed. */
+const KNOWN_CUR = ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD', 'NZD'];
+const COUNTRY_CUR = {
+  US: 'USD', GB: 'GBP', UK: 'GBP', EU: 'EUR', EA: 'EUR', DE: 'EUR', FR: 'EUR',
+  IT: 'EUR', ES: 'EUR', JP: 'JPY', CH: 'CHF', CA: 'CAD', AU: 'AUD', NZ: 'NZD', CN: 'CNY',
+};
+const HIGH_TERMS = ['fomc', 'rate decision', 'interest rate decision', 'non-farm', 'nonfarm', 'nfp',
+  'cpi', 'inflation rate', 'fed chair', 'powell', 'ecb press', 'unemployment rate', 'gdp',
+  'rate statement', 'federal funds', 'central bank', 'monetary policy'];
+const MED_TERMS = ['retail sales', 'pmi', 'ppi', 'jobless claims', 'consumer confidence',
+  'trade balance', 'manufacturing', 'industrial production', 'housing', 'durable goods'];
+
+function normImpact(v) {
+  const s = String(v == null ? '' : v).toLowerCase();
+  if (s === '3' || s === 'high') return 'high';
+  if (s === '2' || s === 'medium') return 'medium';
+  if (s === '1' || s === 'low') return 'low';
+  const n = parseFloat(v);
+  if (n >= 3) return 'high'; if (n >= 2) return 'medium'; if (n >= 1) return 'low';
+  return 'low';
+}
+function parseCalEvent(e) {
+  const country = String(e.country || '').toUpperCase();
+  const cur = COUNTRY_CUR[country] || (KNOWN_CUR.includes(country) ? country : '');
+  const timeStr = String(e.time || '');
+  let epoch = null, allDay = false;
+  if (timeStr) {
+    if (/00:00:00$/.test(timeStr)) allDay = true;
+    const p = Date.parse(timeStr.replace(' ', 'T') + 'Z');
+    if (isFinite(p)) epoch = p;
+  }
+  return { cur, name: e.event || 'Economic event', impact: normImpact(e.impact), epoch, allDay,
+           actual: e.actual, estimate: e.estimate, prev: e.prev, feed: false };
+}
+function detectCur(text) {
+  for (const c of KNOWN_CUR) if (text.includes(c.toLowerCase())) return c;
+  if (/\bfed|federal reserve|fomc|dollar\b/.test(text)) return 'USD';
+  if (/\becb|euro\b/.test(text)) return 'EUR';
+  if (/\bboe|sterling|pound\b/.test(text)) return 'GBP';
+  if (/\bboj|yen\b/.test(text)) return 'JPY';
+  return '';
+}
+function parseNewsItem(n) {
+  const text = ((n.headline || '') + ' ' + (n.summary || '')).toLowerCase();
+  const impact = HIGH_TERMS.some(t => text.includes(t)) ? 'high'
+    : MED_TERMS.some(t => text.includes(t)) ? 'medium' : 'low';
+  if (impact === 'low') return null;
+  return { cur: detectCur(text), name: n.headline || 'News', impact,
+           epoch: n.datetime ? n.datetime * 1000 : null, allDay: false,
+           url: n.url, source: n.source, feed: true };
+}
+
+let newsLoading = false;
+async function fetchNews(force = false) {
+  const st = S.settings;
+  const key = (st.finnhubKey || '').trim();
+  const today = todayKey();
+  if (!force && S.newsCache.date === today && S.newsCache.mode) { renderNews(); return S.newsCache; }
+  if (!key) {
+    S.newsCache = { date: today, mode: 'nokey', events: [], fetchedAt: Date.now(),
+      error: 'No Finnhub API key set — add one in Settings to enable news.' };
+    save(); renderAll(); return S.newsCache;
+  }
+  newsLoading = true; setNewsStatus('Loading…');
+  try {
+    const url = `https://finnhub.io/api/v1/calendar/economic?from=${today}&to=${today}&token=${encodeURIComponent(key)}`;
+    const r = await fetch(url);
+    if (r.ok) {
+      const j = await r.json();
+      const raw = j.economicCalendar || j.economic_calendar || [];
+      if (Array.isArray(raw)) {
+        S.newsCache = { date: today, mode: 'calendar', events: raw.map(parseCalEvent).filter(Boolean),
+          fetchedAt: Date.now(), error: null };
+        save(); newsLoading = false; renderAll(); return S.newsCache;
+      }
+    }
+    throw new Error('calendar ' + r.status);
+  } catch (e1) {
+    try {
+      const r = await fetch(`https://finnhub.io/api/v1/news?category=general&token=${encodeURIComponent(key)}`);
+      if (!r.ok) throw new Error('news ' + r.status);
+      const arr = await r.json();
+      S.newsCache = { date: today, mode: 'feed',
+        events: (Array.isArray(arr) ? arr : []).slice(0, 60).map(parseNewsItem).filter(Boolean),
+        fetchedAt: Date.now(),
+        error: 'Economic Calendar needs a paid Finnhub plan — showing the free headline feed (no scheduled times, so no future blackout windows).' };
+      save(); newsLoading = false; renderAll(); return S.newsCache;
+    } catch (e2) {
+      S.newsCache = { date: today, mode: 'error', events: [], fetchedAt: Date.now(),
+        error: 'News fetch failed: ' + (e2.message || e2) + '. Check the key / connection.' };
+      save(); newsLoading = false; renderAll(); return S.newsCache;
+    }
+  }
+}
+
+function avoidImpacts() { return S.settings.newsAvoidImpact === 'high_medium' ? ['high', 'medium'] : ['high']; }
+function symbolCurrencies(sym) {
+  const s = String(sym || '').toUpperCase().replace(/[^A-Z]/g, '');
+  const found = [];
+  for (const c of KNOWN_CUR) if (s.includes(c)) found.push(c);
+  if ((/XAU|GOLD|XAG|US30|US100|US500|NAS|SPX|NDX/.test(s)) && !found.includes('USD')) found.push('USD');
+  return [...new Set(found)];
+}
+function relevantCurrencies() {
+  const el = document.getElementById('tSym');
+  if (el && el.value.trim()) {
+    const cs = symbolCurrencies(el.value);
+    if (cs.length) return cs;
+  }
+  const w = S.settings.watchCurrencies;
+  return (w && w.length) ? w : ['USD', 'EUR', 'GBP', 'JPY'];
+}
+function activeNewsBlackout() {
+  const c = S.newsCache, st = S.settings;
+  if (st.newsGate === 'no' || !c || !c.events || !c.events.length) return { state: 'clear' };
+  const bo = st.newsBlackoutMin || 30, want = avoidImpacts(), rel = relevantCurrencies(), now = Date.now();
+  const cand = c.events.filter(e => e.epoch && !e.allDay && want.includes(e.impact)
+    && (rel.includes(e.cur) || (!e.cur && e.impact === 'high')));
+  let active = null, soon = null;
+  for (const e of cand) {
+    const dMin = (e.epoch - now) / 60000;
+    if (Math.abs(dMin) <= bo) {
+      if (!active || Math.abs(dMin) < Math.abs(active.dMin)) active = { ...e, dMin };
+    } else if (dMin > 0 && dMin <= bo * 2) {
+      if (!soon || dMin < soon.dMin) soon = { ...e, dMin };
+    }
+  }
+  if (active) return { state: 'active', ...active };
+  if (soon) return { state: 'soon', ...soon };
+  return { state: 'clear' };
+}
+
 /* ---------- prop plan calculator ----------
    Single source of truth: the Prop Plan edits S.settings directly (always in
    percent, like prop firms quote their rules), so the Gate, Settings and this
@@ -699,7 +888,18 @@ function saveSettings() {
   const lines = document.getElementById('sChecklist').value
     .split('\n').map(s => s.trim()).filter(Boolean).slice(0, 10);
   if (lines.length) st.checklist = lines;
-  save(); renderAll(); show('gate');
+  // News settings
+  const prevKey = st.finnhubKey;
+  st.finnhubKey = document.getElementById('sFinnhub').value.trim();
+  st.newsBlackoutMin = Math.round(num('sNewsBlackout', 0, 240, st.newsBlackoutMin));
+  st.newsAvoidImpact = document.getElementById('sNewsImpact').value;
+  st.newsGate = document.getElementById('sNewsGate').value;
+  st.watchCurrencies = document.getElementById('sWatchCur').value
+    .toUpperCase().split(/[, ]+/).map(s => s.trim()).filter(c => KNOWN_CUR.includes(c));
+  if (!st.watchCurrencies.length) st.watchCurrencies = ['USD', 'EUR', 'GBP', 'JPY'];
+  save();
+  if (st.finnhubKey && st.finnhubKey !== prevKey) fetchNews(true);   // new key → refresh now
+  renderAll(); show('gate');
 }
 
 function resetAll() {
@@ -711,15 +911,72 @@ function resetAll() {
 
 /* ---------- rendering ---------- */
 function show(view) {
-  ['gate', 'prop', 'journal', 'stats', 'settings'].forEach(v => {
+  ['gate', 'news', 'prop', 'journal', 'stats', 'settings'].forEach(v => {
     document.getElementById('view-' + v).style.display = v === view ? '' : 'none';
     document.getElementById('tab-' + v).classList.toggle('active', v === view);
   });
   renderAll();
+  if (view === 'news') fetchNews(false);
 }
 
 function renderAll() {
-  renderChecklist(); renderGate(); renderTicket(); renderJournal(); renderStats(); renderSettings(); fillProp();
+  renderChecklist(); renderGate(); renderTicket(); renderJournal(); renderStats(); renderSettings(); fillProp(); renderNews();
+}
+
+function setNewsStatus(msg) {
+  const el = document.getElementById('newsStatus');
+  if (el) el.textContent = msg;
+}
+
+const fmtClock = epoch => new Date(epoch).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+function newsRow(e, now, bo) {
+  const past = e.epoch && e.epoch < now - bo * 60000;
+  const col = e.impact === 'high' ? 'var(--red)' : e.impact === 'medium' ? 'var(--amber)' : 'var(--muted)';
+  const time = e.allDay ? 'all day' : e.epoch ? fmtClock(e.epoch) : '—';
+  const win = (e.epoch && !e.allDay) ? `avoid ${fmtClock(e.epoch - bo * 60000)}–${fmtClock(e.epoch + bo * 60000)}` : '';
+  const name = e.url ? `<a href="${e.url}" target="_blank" rel="noopener" style="color:var(--text)">${e.name}</a>` : e.name;
+  return `<div class="trade" style="opacity:${past ? 0.5 : 1}">
+    <div class="top"><span><b>${time}</b> <span style="color:${col};font-weight:700">${(e.cur || '—')} · ${e.impact.toUpperCase()}</span></span></div>
+    <div class="meta">${name}</div>
+    ${win ? `<div class="meta">${win}</div>` : ''}</div>`;
+}
+
+function renderNews() {
+  const banner = document.getElementById('newsBanner');
+  const avoid = document.getElementById('newsAvoid');
+  const lower = document.getElementById('newsLower');
+  if (!banner) return;
+  const c = S.newsCache, st = S.settings, now = Date.now(), bo = st.newsBlackoutMin || 30;
+
+  if (!c.mode || c.mode === 'nokey') {
+    banner.innerHTML = `<div class="gate-status gate-WAIT"><div class="cmd" style="font-size:22px">NEWS OFF</div><div class="sub">Add a free Finnhub API key in Settings to enable news.</div></div>`;
+    avoid.innerHTML = '<div class="empty">No key set.</div>'; lower.innerHTML = ''; setNewsStatus(c.error || '');
+    return;
+  }
+  if (c.mode === 'error') {
+    banner.innerHTML = `<div class="gate-status gate-BLOCK"><div class="cmd" style="font-size:22px">NEWS ERROR</div><div class="sub">${c.error || ''}</div></div>`;
+    avoid.innerHTML = ''; lower.innerHTML = ''; setNewsStatus('');
+    return;
+  }
+
+  const nb = activeNewsBlackout();
+  let cls = 'gate-ALLOW', head = 'SAFE TO TRADE', sub = 'No high-impact news in your window right now.';
+  if (st.newsGate === 'no') { sub = 'News gate is info-only (Settings).'; }
+  if (nb.state === 'active') { cls = 'gate-BLOCK'; head = 'AVOID — NEWS NOW'; sub = `${nb.cur || ''} ${nb.name} — inside the ±${bo}m window.`; }
+  else if (nb.state === 'soon') { cls = 'gate-WAIT'; head = `NEWS IN ${Math.ceil(nb.dMin)}m`; sub = `${nb.cur || ''} ${nb.name} approaching.`; }
+  banner.innerHTML = `<div class="gate-status ${cls}"><div class="cmd" style="font-size:26px">${head}</div><div class="sub">${sub}</div></div>`;
+
+  const want = avoidImpacts();
+  const hi = c.events.filter(e => want.includes(e.impact)).sort((a, b) => (a.epoch || 0) - (b.epoch || 0));
+  const lo = c.events.filter(e => !want.includes(e.impact)).sort((a, b) => (a.epoch || 0) - (b.epoch || 0));
+  avoid.innerHTML = hi.length ? hi.map(e => newsRow(e, now, bo)).join('')
+    : `<div class="empty">No ${want.join('/')}-impact events ${c.mode === 'feed' ? 'in the headline feed' : 'scheduled today'} for any currency.</div>`;
+  lower.innerHTML = lo.length ? lo.map(e => newsRow(e, now, bo)).join('') : '<div class="empty">Nothing lower-impact to show.</div>';
+
+  const modeLbl = c.mode === 'calendar' ? 'Economic Calendar (scheduled times)'
+    : c.mode === 'feed' ? 'free headline feed' : c.mode;
+  setNewsStatus(`${newsLoading ? 'Loading… · ' : ''}Source: ${modeLbl}. Updated ${fmtClock(c.fetchedAt)}. Watching ${relevantCurrencies().join(', ')}.${c.error ? ' — ' + c.error : ''}`);
 }
 
 function fillProp() {
@@ -935,11 +1192,18 @@ function renderSettings() {
   document.getElementById('sMinRR').value = st.minRR;
   document.getElementById('sLockRem').value = st.lockReminderMin;
   document.getElementById('sChecklist').value = st.checklist.join('\n');
+  document.getElementById('sFinnhub').value = st.finnhubKey || '';
+  document.getElementById('sNewsBlackout').value = st.newsBlackoutMin;
+  document.getElementById('sNewsImpact').value = st.newsAvoidImpact;
+  document.getElementById('sNewsGate').value = st.newsGate;
+  document.getElementById('sWatchCur').value = (st.watchCurrencies || []).join(', ');
   togglePropFields();
 }
 
 renderAll();
-setInterval(renderGate, 30000); // keep cooldown countdown fresh
+setInterval(renderGate, 30000);  // keep cooldown countdown fresh
+setInterval(() => { renderGate(); renderNews(); }, 60000);  // re-evaluate news window every minute
+if (S.settings.finnhubKey) fetchNews(false);   // one cached call per day on startup
 </script>
 </body>
 </html>
