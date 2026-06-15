@@ -701,7 +701,8 @@ function parseNewsItem(n) {
   const text = ((n.headline || '') + ' ' + (n.summary || '')).toLowerCase();
   const impact = HIGH_TERMS.some(t => text.includes(t)) ? 'high'
     : MED_TERMS.some(t => text.includes(t)) ? 'medium' : 'low';
-  if (impact === 'low') return null;
+  // Keep low-impact items too — the trader should still SEE the headline flow;
+  // only high/medium ones drive the gate. Dropping them made the tab look empty.
   return { cur: detectCur(text), name: n.headline || 'News', impact,
            epoch: n.datetime ? n.datetime * 1000 : null, allDay: false,
            url: n.url, source: n.source, feed: true };
@@ -961,10 +962,19 @@ function renderNews() {
   }
 
   const nb = activeNewsBlackout();
-  let cls = 'gate-ALLOW', head = 'SAFE TO TRADE', sub = 'No high-impact news in your window right now.';
-  if (st.newsGate === 'no') { sub = 'News gate is info-only (Settings).'; }
-  if (nb.state === 'active') { cls = 'gate-BLOCK'; head = 'AVOID — NEWS NOW'; sub = `${nb.cur || ''} ${nb.name} — inside the ±${bo}m window.`; }
-  else if (nb.state === 'soon') { cls = 'gate-WAIT'; head = `NEWS IN ${Math.ceil(nb.dMin)}m`; sub = `${nb.cur || ''} ${nb.name} approaching.`; }
+  let cls, head, sub;
+  if (nb.state === 'active') {
+    cls = 'gate-BLOCK'; head = 'AVOID — NEWS NOW'; sub = `${nb.cur || ''} ${nb.name} — inside the ±${bo}m window.`;
+  } else if (nb.state === 'soon') {
+    cls = 'gate-WAIT'; head = `NEWS IN ${Math.ceil(nb.dMin)}m`; sub = `${nb.cur || ''} ${nb.name} approaching.`;
+  } else if (c.mode === 'feed') {
+    // Honest: the free feed has no scheduled calendar — never claim "safe".
+    cls = 'gate-WAIT'; head = 'READ THE HEADLINES';
+    sub = 'Free feed has no scheduled times — skim the headlines and check an economic calendar before trading.';
+  } else {
+    cls = 'gate-ALLOW'; head = 'SAFE TO TRADE'; sub = 'No high-impact event in your window right now.';
+  }
+  if (st.newsGate === 'no') sub += ' (Gate is info-only.)';
   banner.innerHTML = `<div class="gate-status ${cls}"><div class="cmd" style="font-size:26px">${head}</div><div class="sub">${sub}</div></div>`;
 
   const want = avoidImpacts();
@@ -972,7 +982,7 @@ function renderNews() {
   const lo = c.events.filter(e => !want.includes(e.impact)).sort((a, b) => (a.epoch || 0) - (b.epoch || 0));
   avoid.innerHTML = hi.length ? hi.map(e => newsRow(e, now, bo)).join('')
     : `<div class="empty">No ${want.join('/')}-impact events ${c.mode === 'feed' ? 'in the headline feed' : 'scheduled today'} for any currency.</div>`;
-  lower.innerHTML = lo.length ? lo.map(e => newsRow(e, now, bo)).join('') : '<div class="empty">Nothing lower-impact to show.</div>';
+  lower.innerHTML = lo.length ? lo.slice(0, 15).map(e => newsRow(e, now, bo)).join('') : '<div class="empty">Nothing lower-impact to show.</div>';
 
   const modeLbl = c.mode === 'calendar' ? 'Economic Calendar (scheduled times)'
     : c.mode === 'feed' ? 'free headline feed' : c.mode;
